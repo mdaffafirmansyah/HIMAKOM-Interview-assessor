@@ -10,6 +10,7 @@ export interface CreateCandidateDTO {
   campus: CampusOrigin;
   notes?: string;
   division_ids: [string, string]; // Wajib tepat dua divisi berbeda
+  interviewer_ids?: [string | null, string | null]; // Opsional: penugasan pewawancara per pilihan
 }
 
 export const candidateService = {
@@ -33,7 +34,9 @@ export const candidateService = {
             id,
             status,
             created_at,
-            division:divisions (name, code)
+            division_id,
+            division:divisions (name, code),
+            interviewer:profiles (id, full_name)
           )
         `)
         .order('created_at', { ascending: false });
@@ -114,6 +117,23 @@ export const candidateService = {
       if (divErr2) {
         await supabase.from('candidates').delete().eq('id', candidateId);
         return { data: null, error: `Gagal menetapkan pilihan divisi 2: ${divErr2.message}` };
+      }
+
+      // 3. Jika admin langsung memilih pewawancara pada form pendaftaran, perbarui sesi yang baru terbuat
+      if (dto.interviewer_ids?.[0]) {
+        await supabase
+          .from('interview_sessions')
+          .update({ interviewer_id: dto.interviewer_ids[0] })
+          .eq('candidate_id', candidateId)
+          .eq('division_id', dto.division_ids[0]);
+      }
+
+      if (dto.interviewer_ids?.[1]) {
+        await supabase
+          .from('interview_sessions')
+          .update({ interviewer_id: dto.interviewer_ids[1] })
+          .eq('candidate_id', candidateId)
+          .eq('division_id', dto.division_ids[1]);
       }
 
       return { data: candidateData as Candidate, error: null };

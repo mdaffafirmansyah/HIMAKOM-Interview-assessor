@@ -9,15 +9,17 @@ import {
   AlertCircle,
   Building,
   GraduationCap,
+  UserCheck,
 } from 'lucide-react';
 import { EmptyState } from '../components/ui/EmptyState';
 import { Badge } from '../components/ui/Badge';
-import { candidateService, divisionService } from '../services';
-import type { Candidate, Division, Peminatan, CampusOrigin } from '../types';
+import { candidateService, divisionService, sessionService } from '../services';
+import type { Candidate, Division, Peminatan, CampusOrigin, UserProfile } from '../types';
 
 export const CandidatesPage: React.FC = () => {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [divisions, setDivisions] = useState<Division[]>([]);
+  const [interviewers, setInterviewers] = useState<UserProfile[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [selectedDivisionFilter, setSelectedDivisionFilter] = useState<string>('all');
@@ -34,16 +36,20 @@ export const CandidatesPage: React.FC = () => {
   const [campus, setCampus] = useState<CampusOrigin>('Kaliabang');
   const [division1, setDivision1] = useState<string>('');
   const [division2, setDivision2] = useState<string>('');
+  const [interviewer1, setInterviewer1] = useState<string>('');
+  const [interviewer2, setInterviewer2] = useState<string>('');
   const [notes, setNotes] = useState<string>('');
 
   const loadData = async () => {
     setIsLoading(true);
-    const [candRes, divRes] = await Promise.all([
+    const [candRes, divRes, intvRes] = await Promise.all([
       candidateService.getCandidates(),
       divisionService.getDivisions(),
+      sessionService.getInterviewers(),
     ]);
 
     if (candRes.data) setCandidates(candRes.data);
+    if (intvRes.data) setInterviewers(intvRes.data);
     if (divRes.data) {
       setDivisions(divRes.data);
       if (divRes.data.length >= 2) {
@@ -98,6 +104,7 @@ export const CandidatesPage: React.FC = () => {
       campus,
       notes: notes.trim(),
       division_ids: [division1, division2],
+      interviewer_ids: [interviewer1 || null, interviewer2 || null],
     });
 
     setIsSubmitting(false);
@@ -113,6 +120,8 @@ export const CandidatesPage: React.FC = () => {
       setNim('');
       setClassName('');
       setNotes('');
+      setInterviewer1('');
+      setInterviewer2('');
       handleCloseModal();
       loadData();
     }
@@ -227,20 +236,33 @@ export const CandidatesPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* 2 Sesi Divisi Terpilih */}
+              {/* 2 Sesi Divisi Terpilih & Pewawancara */}
               <div className="pt-2 border-t border-gray-100 space-y-1.5">
                 <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
                   Sesi Divisi Wawancara:
                 </div>
                 <div className="flex flex-wrap gap-1.5">
-                  {(candidate.divisions || []).map((div) => (
-                    <span
-                      key={div.id}
-                      className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold bg-himakom-lavender text-himakom-blue border border-himakom-lavender-dark/40"
-                    >
-                      {div.name}
-                    </span>
-                  ))}
+                  {(candidate.divisions || []).map((div, dIdx) => {
+                    const sess = candidate.sessions?.[dIdx];
+                    const intvName = (sess as any)?.interviewer?.full_name;
+                    return (
+                      <span
+                        key={div.id}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-blue-50 text-[#244BFF] border border-blue-100"
+                      >
+                        <span className="font-bold">Pilihan {dIdx + 1}: {div.name}</span>
+                        {intvName ? (
+                          <span className="text-gray-700 font-medium text-[11px]">
+                            • 👤 {intvName}
+                          </span>
+                        ) : (
+                          <span className="text-amber-800 font-bold text-[11px] bg-amber-100/70 px-1.5 py-0.2 rounded">
+                            ⚠️ Belum Ditugaskan
+                          </span>
+                        )}
+                      </span>
+                    );
+                  })}
                 </div>
               </div>
             </div>
@@ -406,6 +428,57 @@ export const CandidatesPage: React.FC = () => {
                       {divisions.map((d) => (
                         <option key={d.id} value={d.id}>
                           {d.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* Penugasan Pewawancara (Opsional Langsung) */}
+              <div className="p-3.5 bg-blue-50/50 border border-blue-200/80 rounded-xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <UserCheck className="w-4 h-4 text-[#244BFF]" />
+                    <span className="text-xs font-bold text-gray-900">
+                      Penugasan Pewawancara (Opsional)
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-gray-500">
+                    Bisa juga ditugaskan nanti di Sesi Wawancara
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-600 mb-1">
+                      Pewawancara Pilihan 1:
+                    </label>
+                    <select
+                      value={interviewer1}
+                      onChange={(e) => setInterviewer1(e.target.value)}
+                      className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-gray-200 focus:ring-2 focus:ring-[#244BFF] bg-white text-gray-800 font-medium"
+                    >
+                      <option value="">— Belum Ditugaskan —</option>
+                      {interviewers.map((intv) => (
+                        <option key={intv.id} value={intv.id}>
+                          {intv.full_name} ({intv.role === 'admin' ? 'Admin' : 'Pewawancara'})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-600 mb-1">
+                      Pewawancara Pilihan 2:
+                    </label>
+                    <select
+                      value={interviewer2}
+                      onChange={(e) => setInterviewer2(e.target.value)}
+                      className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-gray-200 focus:ring-2 focus:ring-[#244BFF] bg-white text-gray-800 font-medium"
+                    >
+                      <option value="">— Belum Ditugaskan —</option>
+                      {interviewers.map((intv) => (
+                        <option key={intv.id} value={intv.id}>
+                          {intv.full_name} ({intv.role === 'admin' ? 'Admin' : 'Pewawancara'})
                         </option>
                       ))}
                     </select>

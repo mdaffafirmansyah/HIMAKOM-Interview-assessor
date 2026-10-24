@@ -1,7 +1,59 @@
 import { supabase } from '../lib/supabase';
-import type { InterviewSession, SessionStatus } from '../types';
+import type { InterviewSession, SessionStatus, UserProfile } from '../types';
 
 export const sessionService = {
+  // Mengambil daftar seluruh pewawancara aktif (role interviewer dan admin)
+  async getInterviewers(): Promise<{ data: UserProfile[]; error: string | null }> {
+    const demoInterviewers: UserProfile[] = [
+      {
+        id: '22222222-2222-2222-2222-222222222222',
+        email: 'pewawancara@himakom.org',
+        full_name: 'Pewawancara Divisi (PSDM)',
+        role: 'interviewer',
+        is_active: true,
+        created_at: new Date().toISOString(),
+      },
+      {
+        id: '11111111-1111-1111-1111-111111111111',
+        email: 'admin@himakom.org',
+        full_name: 'Administrator HIMAKOM',
+        role: 'admin',
+        is_active: true,
+        created_at: new Date().toISOString(),
+      },
+    ];
+
+    if (!supabase) {
+      return { data: demoInterviewers, error: null };
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .in('role', ['interviewer', 'admin'])
+        .eq('is_active', true)
+        .order('full_name', { ascending: true });
+
+      if (error) {
+        console.warn('Gagal memuat profil pewawancara dari Supabase, menggunakan data fallback:', error.message);
+        return { data: demoInterviewers, error: null };
+      }
+
+      const list: UserProfile[] = [...((data as UserProfile[]) || [])];
+
+      // Pastikan akun pewawancara demo tetap tersedia sebagai opsi jika belum ada
+      if (!list.some((u) => u.id === '22222222-2222-2222-2222-222222222222')) {
+        list.push(demoInterviewers[0]);
+      }
+
+      return { data: list, error: null };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Gagal memuat data pewawancara';
+      return { data: demoInterviewers, error: message };
+    }
+  },
+
   // Mengambil daftar sesi wawancara dengan relasi kandidat, divisi asli, dan pewawancara
   async getSessions(filters?: {
     divisionId?: string;
@@ -88,15 +140,46 @@ export const sessionService = {
     }
   },
 
-  // Menugaskan pewawancara ke sesi
-  async assignInterviewer(sessionId: string, interviewerId: string): Promise<{ success: boolean; error: string | null }> {
+  // Menugaskan pewawancara ke sesi tertentu
+  async assignInterviewer(
+    sessionId: string,
+    interviewerId: string | null
+  ): Promise<{ success: boolean; error: string | null }> {
     if (!supabase) return { success: false, error: 'Database belum terhubung' };
 
     try {
       const { error } = await supabase
         .from('interview_sessions')
-        .update({ interviewer_id: interviewerId, updated_at: new Date().toISOString() })
+        .update({
+          interviewer_id: interviewerId ? interviewerId : null,
+          updated_at: new Date().toISOString(),
+        })
         .eq('id', sessionId);
+
+      if (error) return { success: false, error: error.message };
+      return { success: true, error: null };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Gagal menugaskan pewawancara';
+      return { success: false, error: message };
+    }
+  },
+
+  // Menugaskan pewawancara ke beberapa sesi sekaligus (misal dua pilihan kandidat)
+  async batchAssignInterviewer(
+    sessionIds: string[],
+    interviewerId: string | null
+  ): Promise<{ success: boolean; error: string | null }> {
+    if (!supabase) return { success: false, error: 'Database belum terhubung' };
+    if (!sessionIds || sessionIds.length === 0) return { success: true, error: null };
+
+    try {
+      const { error } = await supabase
+        .from('interview_sessions')
+        .update({
+          interviewer_id: interviewerId ? interviewerId : null,
+          updated_at: new Date().toISOString(),
+        })
+        .in('id', sessionIds);
 
       if (error) return { success: false, error: error.message };
       return { success: true, error: null };
@@ -121,10 +204,20 @@ export const sessionService = {
         updated_at: new Date().toISOString(),
       };
 
-      if (authData?.user?.id) updates.interviewer_id = authData.user.id;
       if (notes !== undefined) updates.session_notes = notes;
       if (status === 'in_progress') updates.started_at = new Date().toISOString();
       if (status === 'completed') updates.completed_at = new Date().toISOString();
+
+      // Hanya isi interviewer_id jika belum ada penugasan dari admin
+      const { data: currentSession } = await supabase
+        .from('interview_sessions')
+        .select('interviewer_id')
+        .eq('id', sessionId)
+        .maybeSingle();
+
+      if (!currentSession?.interviewer_id && authData?.user?.id) {
+        updates.interviewer_id = authData.user.id;
+      }
 
       const { error } = await supabase
         .from('interview_sessions')
