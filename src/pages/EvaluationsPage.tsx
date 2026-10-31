@@ -1,11 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   FileText,
   Sparkles,
   CheckCircle,
-  ShieldAlert,
   Search,
-  Filter,
   ArrowLeft,
   Volume2,
   RefreshCw,
@@ -20,9 +18,9 @@ import {
   Cpu,
   Upload,
   User,
-  Clock,
+  GraduationCap,
+  Building,
 } from 'lucide-react';
-import { Badge } from '../components/ui/Badge';
 import { EmptyState } from '../components/ui/EmptyState';
 import { AudioPlayer } from '../components/ui/AudioPlayer';
 import { sessionService } from '../services/sessionService';
@@ -32,7 +30,12 @@ import { reviewService } from '../services/reviewService';
 import { divisionService } from '../services/divisionService';
 import { aiEvaluationService, type AnalysisResult } from '../services/aiEvaluationService';
 import { useAuth } from '../context/AuthContext';
-import type { InterviewSession, Question, RubricLevel, Division } from '../types';
+import type { InterviewSession, Question, RubricLevel, Division, Candidate } from '../types';
+
+interface CandidateGroup {
+  candidate: Candidate;
+  sessions: InterviewSession[];
+}
 
 export const EvaluationsPage: React.FC = () => {
   const { user } = useAuth();
@@ -354,26 +357,83 @@ export const EvaluationsPage: React.FC = () => {
     }
   };
 
-  // Filter Data Sesi di Antrean
-  const filteredSessions = sessions.filter((s) => {
-    const matchesSearch =
-      (s.candidate?.full_name?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
-      (s.candidate?.nim || '').includes(searchTerm) ||
-      (s.division?.name?.toLowerCase() || '').includes(searchTerm.toLowerCase());
+  // Kelompokkan sesi per calon/kandidat agar tampilan satu baris rapi
+  const candidateGroups = useMemo<CandidateGroup[]>(() => {
+    const map = new Map<string, CandidateGroup>();
 
-    const matchesDivision = divisionFilter === 'all' || s.division_id === divisionFilter;
+    sessions.forEach((sess) => {
+      if (!sess.candidate) return;
 
-    let matchesStatus = true;
-    if (statusFilter === 'ready') {
-      matchesStatus = s.status === 'completed' || s.status === 'in_progress';
-    } else if (statusFilter === 'evaluated') {
-      matchesStatus = !!s.review?.final_score;
-    } else if (statusFilter === 'pending') {
-      matchesStatus = s.status === 'scheduled';
-    }
+      const cid = sess.candidate.id;
+      if (!map.has(cid)) {
+        map.set(cid, {
+          candidate: sess.candidate,
+          sessions: [],
+        });
+      }
+      map.get(cid)!.sessions.push(sess);
+    });
 
-    return matchesSearch && matchesDivision && matchesStatus;
-  });
+    // Urutkan pilihan 1 sebelum pilihan 2
+    map.forEach((group) => {
+      const candidateDivisions = (group.candidate as any)?.candidate_divisions || [];
+      if (candidateDivisions.length > 0) {
+        const sortedDivs = [...candidateDivisions].sort(
+          (a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        );
+
+        const priorityMap = new Map<string, number>();
+        sortedDivs.forEach((cd: any, index: number) => {
+          if (cd.division_id) priorityMap.set(cd.division_id, index);
+        });
+
+        group.sessions.sort((a, b) => {
+          const pA = priorityMap.has(a.division_id) ? priorityMap.get(a.division_id)! : 999;
+          const pB = priorityMap.has(b.division_id) ? priorityMap.get(b.division_id)! : 999;
+          if (pA !== pB) return pA - pB;
+          return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+        });
+      } else {
+        group.sessions.sort(
+          (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        );
+      }
+    });
+
+    return Array.from(map.values());
+  }, [sessions]);
+
+  // Filter Data Calon di Antrean
+  const filteredGroups = useMemo(() => {
+    const term = searchTerm.toLowerCase().trim();
+
+    return candidateGroups.filter((group: CandidateGroup) => {
+      const c = group.candidate;
+
+      const matchesSearch =
+        !term ||
+        c.full_name?.toLowerCase().includes(term) ||
+        c.nim?.toLowerCase().includes(term) ||
+        c.class_name?.toLowerCase().includes(term) ||
+        c.major?.toLowerCase().includes(term) ||
+        group.sessions.some((s: InterviewSession) => s.division?.name?.toLowerCase().includes(term));
+
+      const matchesDivision =
+        divisionFilter === 'all' ||
+        group.sessions.some((s: InterviewSession) => s.division_id === divisionFilter);
+
+      let matchesStatus = true;
+      if (statusFilter === 'ready') {
+        matchesStatus = group.sessions.some((s: InterviewSession) => s.status === 'completed' || s.status === 'in_progress');
+      } else if (statusFilter === 'evaluated') {
+        matchesStatus = group.sessions.some((s: InterviewSession) => s.review?.final_score !== undefined && s.review?.final_score !== null);
+      } else if (statusFilter === 'pending') {
+        matchesStatus = group.sessions.some((s: InterviewSession) => s.status === 'scheduled');
+      }
+
+      return matchesSearch && matchesDivision && matchesStatus;
+    });
+  }, [candidateGroups, searchTerm, divisionFilter, statusFilter]);
 
   // Filter Soal di Workspace
   const filteredQuestions = questions.filter((q) => {
@@ -384,162 +444,82 @@ export const EvaluationsPage: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      {/* TAMPILAN 1: Antrean Evaluasi AI (Jika Belum Memilih Sesi) */}
+      {/* TAMPILAN 1: Antrean Evaluasi AI (Satu Baris Rapi per Calon) */}
       {!selectedSession ? (
-        <>
-          {/* Header section */}
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div className="space-y-5">
+          {/* Header Sederhana */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Evaluasi AI & Transkripsi Wawancara</h1>
-              <p className="text-sm text-gray-500 mt-1">
+              <h1 className="text-xl sm:text-2xl font-bold text-gray-900 tracking-tight">Evaluasi AI &amp; Transkripsi Wawancara</h1>
+              <p className="text-xs sm:text-sm text-gray-500 mt-0.5">
                 Pipeline 3 tahap: Audio-to-Text, Pencocokan Rubrik, dan Rekomendasi Skor Awal Terjustifikasi.
               </p>
             </div>
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={loadSessionsData}
-                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white border border-gray-200 text-gray-700 text-sm font-semibold shadow-xs hover:bg-gray-50 transition cursor-pointer"
-              >
-                <RefreshCw className={`w-4 h-4 text-gray-500 ${isLoadingList ? 'animate-spin' : ''}`} />
-                <span>Segarkan Antrean</span>
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={loadSessionsData}
+              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white border border-gray-200 text-gray-700 text-xs font-semibold shadow-xs hover:bg-gray-50 transition cursor-pointer self-start sm:self-auto"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-gray-500 ${isLoadingList ? 'animate-spin' : ''}`} />
+              <span>Segarkan Antrean</span>
+            </button>
           </div>
 
-          {/* Kartu Penjelasan Arsitektur Pipeline 3 Tahap */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {/* Tahap 1 */}
-            <div className="bg-white p-5 rounded-2xl border border-blue-100 shadow-2xs hover:border-[#244BFF]/40 transition space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-bold text-[#244BFF] uppercase tracking-wider bg-blue-50 px-2.5 py-1 rounded-md">
-                  Tahap 1
-                </span>
-                <Badge variant="primary">Audio-to-Text</Badge>
-              </div>
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-blue-50 text-[#244BFF] flex items-center justify-center shrink-0 border border-blue-100">
-                  <FileText className="w-4 h-4" />
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold text-gray-900">Audio to Text Pipeline</h3>
-                  <p className="text-[11px] text-gray-500">Konversi respon suara per pertanyaan</p>
-                </div>
-              </div>
-              <p className="text-xs text-gray-600 leading-relaxed">
-                Mengekstrak ucapan kandidat dari rekaman suara U1–U4 &amp; D1–D4 menjadi teks transkrip akurat.
-              </p>
-            </div>
-
-            {/* Tahap 2 */}
-            <div className="bg-white p-5 rounded-2xl border border-indigo-100 shadow-2xs hover:border-indigo-400 transition space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-bold text-indigo-700 uppercase tracking-wider bg-indigo-50 px-2.5 py-1 rounded-md">
-                  Tahap 2
-                </span>
-                <Badge variant="neutral">Analisis Kriteria</Badge>
-              </div>
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-indigo-50 text-indigo-700 flex items-center justify-center shrink-0 border border-indigo-100">
-                  <Sparkles className="w-4 h-4 text-amber-500" />
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold text-gray-900">Pencocokan Rubrik AI</h3>
-                  <p className="text-[11px] text-gray-500">Benchmark 1 kriteria &amp; kata kunci</p>
-                </div>
-              </div>
-              <p className="text-xs text-gray-600 leading-relaxed">
-                Mencocokkan transkrip jawaban terhadap 1 kriteria pokok, mendeteksi kata kunci, dan mengukur persentase relevansi.
-              </p>
-            </div>
-
-            {/* Tahap 3 */}
-            <div className="bg-white p-5 rounded-2xl border border-emerald-100 shadow-2xs hover:border-emerald-400 transition space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-bold text-emerald-700 uppercase tracking-wider bg-emerald-50 px-2.5 py-1 rounded-md">
-                  Tahap 3
-                </span>
-                <Badge variant="success">Human-in-the-Loop</Badge>
-              </div>
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0 border border-emerald-100">
-                  <CheckCircle className="w-4 h-4" />
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold text-gray-900">Skor Awal Justifikasi</h3>
-                  <p className="text-[11px] text-gray-500">Bobot 40% umum + 60% divisi</p>
-                </div>
-              </div>
-              <p className="text-xs text-gray-600 leading-relaxed">
-                Menghitung rekomendasi nilai awal terjustifikasi secara transparan untuk divalidasi oleh asesor manusia.
-              </p>
-            </div>
-          </div>
-
-          {/* Safety & Integrity Notice */}
-          <div className="bg-amber-50/80 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
-            <ShieldAlert className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-            <div className="text-xs text-amber-900 leading-relaxed">
-              <strong className="font-semibold text-amber-950">Prinsip Human-in-the-Loop:</strong> Skor yang dihasilkan oleh pipeline AI merupakan rekomendasi awal terjustifikasi. Seluruh keputusan akhir dan penentuan kelulusan calon pengurus tetap berada di bawah wewenang pimpinan dan asesor manusia di menu Review Asesor.
-            </div>
-          </div>
-
-          {/* Filter & Pencarian Sesi */}
-          <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-xs flex flex-col md:flex-row gap-3">
+          {/* Filter & Pencarian Kompak */}
+          <div className="bg-white p-3 sm:p-4 rounded-xl border border-gray-200 shadow-xs flex flex-col md:flex-row gap-2.5">
             <div className="relative flex-1">
-              <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
+              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input
                 type="text"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Cari berdasarkan nama calon pengurus, NIM, atau divisi..."
-                className="w-full pl-10 pr-4 py-2 text-sm rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#244BFF] focus:border-transparent transition"
+                placeholder="Cari nama, NIM, atau kelas kandidat..."
+                className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm rounded-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#244BFF] transition"
               />
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              <div className="relative flex items-center">
-                <Filter className="w-4 h-4 absolute left-3 text-gray-400 pointer-events-none" />
-                <select
-                  value={divisionFilter}
-                  onChange={(e) => setDivisionFilter(e.target.value)}
-                  className="pl-9 pr-8 py-2 text-sm rounded-lg border border-gray-200 bg-white focus:outline-none focus:ring-2 focus:ring-[#244BFF] text-gray-700"
-                >
-                  <option value="all">Semua Divisi</option>
-                  {divisions.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <select
+                value={divisionFilter}
+                onChange={(e) => setDivisionFilter(e.target.value)}
+                className="px-3 py-2 text-xs rounded-lg border border-gray-200 bg-white focus:outline-none focus:ring-2 focus:ring-[#244BFF] text-gray-700"
+              >
+                <option value="all">Semua Divisi</option>
+                {divisions.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}
+                  </option>
+                ))}
+              </select>
 
               <select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value as any)}
-                className="px-3 py-2 text-sm rounded-lg border border-gray-200 bg-white focus:outline-none focus:ring-2 focus:ring-[#244BFF] text-gray-700"
+                className="px-3 py-2 text-xs rounded-lg border border-gray-200 bg-white focus:outline-none focus:ring-2 focus:ring-[#244BFF] text-gray-700"
               >
                 <option value="all">Semua Status</option>
-                <option value="ready">Wawancara Selesai / Rekaman Siap</option>
+                <option value="ready">Wawancara Selesai / Audio Siap</option>
                 <option value="evaluated">Sudah Ada Skor AI</option>
                 <option value="pending">Belum Diwawancarai</option>
               </select>
 
-              <Badge variant="neutral">Total: {filteredSessions.length} Sesi</Badge>
+              <span className="text-xs text-gray-500 font-medium px-2 py-1 bg-gray-100 rounded-md">
+                {filteredGroups.length} Calon
+              </span>
             </div>
           </div>
 
-          {/* Daftar Kartu Sesi untuk Diproses Pipeline */}
+          {/* Daftar Calon & Sesi (Satu Baris Rapi) */}
           {isLoadingList ? (
-            <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center text-sm text-gray-500">
-              Memuat antrean sesi wawancara...
+            <div className="bg-white rounded-xl border border-gray-200 p-10 text-center text-xs sm:text-sm text-gray-500">
+              Memuat antrean evaluasi AI...
             </div>
-          ) : filteredSessions.length === 0 ? (
-            <div className="bg-white rounded-2xl border border-gray-200 p-8 shadow-xs">
+          ) : filteredGroups.length === 0 ? (
+            <div className="bg-white rounded-xl border border-gray-200 p-8 text-center">
               <EmptyState
                 icon={Cpu}
                 title="Tidak Ada Sesi yang Cocok"
-                description="Tidak ada sesi wawancara yang sesuai dengan filter atau kata kunci pencarian Anda."
+                description="Tidak ada kandidat atau sesi wawancara yang sesuai dengan filter atau kata kunci pencarian Anda."
                 actionText="Reset Pencarian"
                 onAction={() => {
                   setSearchTerm('');
@@ -549,100 +529,141 @@ export const EvaluationsPage: React.FC = () => {
               />
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {filteredSessions.map((session) => {
-                const hasScore = session.review?.final_score !== undefined && session.review?.final_score !== null;
-                const isCompleted = session.status === 'completed';
+            <div className="space-y-4">
+              {filteredGroups.map((group: CandidateGroup) => {
+                const allEvaluated =
+                  group.sessions.length > 0 &&
+                  group.sessions.every(
+                    (s: InterviewSession) => s.review?.final_score !== undefined && s.review?.final_score !== null
+                  );
 
                 return (
                   <div
-                    key={session.id}
-                    className="bg-white rounded-2xl border border-gray-200 shadow-2xs hover:shadow-sm hover:border-[#244BFF]/50 transition-all p-5 flex flex-col justify-between gap-4"
+                    key={group.candidate.id}
+                    className="bg-white rounded-xl border border-gray-200 shadow-2xs hover:border-blue-200 transition p-4 sm:p-5 space-y-3.5"
                   >
-                    <div className="space-y-3">
-                      {/* Baris Badge & Divisi */}
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold bg-[#244BFF] text-white">
-                            {session.division?.name || 'Divisi'}
-                          </span>
-                          <span className="text-xs text-gray-500 font-mono">
-                            NIM: {session.candidate?.nim}
-                          </span>
+                    {/* Header Profil Calon */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-gray-100 gap-2">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-blue-50 text-[#244BFF] font-bold text-sm flex items-center justify-center shrink-0 border border-blue-100">
+                          {group.candidate.full_name?.charAt(0) || 'C'}
                         </div>
-                        {hasScore ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold">
-                            <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-                            <span>Skor: {session.review?.final_score} / 100</span>
-                          </span>
-                        ) : isCompleted ? (
-                          <Badge variant="primary">Audio Siap Dievaluasi</Badge>
-                        ) : (
-                          <Badge variant="neutral">Dijadwalkan</Badge>
-                        )}
-                      </div>
-
-                      {/* Info Kandidat */}
-                      <div>
-                        <h3 className="text-base font-bold text-gray-900 leading-tight">
-                          {session.candidate?.full_name}
-                        </h3>
-                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500 mt-1">
-                          <span>{session.candidate?.major}</span>
-                          <span>•</span>
-                          <span>Kelas {session.candidate?.class_name}</span>
-                          <span>•</span>
-                          <span>{session.candidate?.campus}</span>
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h2 className="text-sm sm:text-base font-bold text-gray-900">
+                              {group.candidate.full_name}
+                            </h2>
+                            <span className="font-mono text-[11px] text-gray-500 bg-gray-100 px-2 py-0.5 rounded">
+                              NIM: {group.candidate.nim}
+                            </span>
+                            <span className="text-[11px] font-semibold text-[#244BFF] bg-blue-50 px-2 py-0.5 rounded">
+                              {group.candidate.major}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-3 text-xs text-gray-500 mt-0.5">
+                            <span className="flex items-center gap-1">
+                              <GraduationCap className="w-3.5 h-3.5 text-gray-400" />
+                              {group.candidate.class_name} (Smtr {group.candidate.semester})
+                            </span>
+                            <span>•</span>
+                            <span className="flex items-center gap-1">
+                              <Building className="w-3.5 h-3.5 text-gray-400" />
+                              {group.candidate.campus}
+                            </span>
+                          </div>
                         </div>
                       </div>
 
-                      {/* Detail Pewawancara & Status */}
-                      <div className="p-3 bg-gray-50 rounded-xl text-xs text-gray-600 space-y-1.5 border border-gray-100">
-                        <div className="flex items-center justify-between">
-                          <span className="text-gray-500 flex items-center gap-1.5">
-                            <User className="w-3.5 h-3.5 text-gray-400" />
-                            Pewawancara:
-                          </span>
-                          <strong className="text-gray-800 font-semibold">
-                            {session.interviewer?.full_name || 'Belum Ditugaskan'}
-                          </strong>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-gray-500 flex items-center gap-1.5">
-                            <Clock className="w-3.5 h-3.5 text-gray-400" />
-                            Status Sesi:
-                          </span>
-                          <span className="font-medium text-gray-700 capitalize">
-                            {session.status === 'completed'
-                              ? 'Wawancara Selesai'
-                              : session.status === 'in_progress'
-                              ? 'Sedang Berlangsung'
-                              : 'Dijadwalkan'}
-                          </span>
-                        </div>
-                      </div>
+                      {allEvaluated && (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 self-start sm:self-auto">
+                          <Sparkles className="w-3 h-3 text-emerald-600" />
+                          ✓ Evaluasi Lengkap
+                        </span>
+                      )}
                     </div>
 
-                    {/* Tombol Aksi Masuk Workspace Pipeline */}
-                    <button
-                      type="button"
-                      onClick={() => handleOpenWorkspace(session)}
-                      className={`w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition shadow-xs cursor-pointer ${
-                        hasScore
-                          ? 'bg-slate-900 hover:bg-slate-800 text-white'
-                          : 'bg-[#244BFF] hover:bg-[#183CD8] text-white shadow-sm'
-                      }`}
-                    >
-                      <Sparkles className="w-4 h-4 text-amber-300" />
-                      <span>{hasScore ? 'Tinjau / Perbarui Pipeline AI' : 'Mulai Evaluasi AI Pipeline'}</span>
-                      <ChevronRight className="w-4 h-4" />
-                    </button>
+                    {/* Sesi Divisi (Pilihan 1 & Pilihan 2 Berdampingan Langsung) */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {group.sessions.map((session: InterviewSession, sIdx: number) => {
+                        const hasScore =
+                          session.review?.final_score !== undefined &&
+                          session.review?.final_score !== null;
+                        const isCompleted = session.status === 'completed';
+
+                        return (
+                          <div
+                            key={session.id}
+                            className={`p-3.5 rounded-xl border transition flex flex-col justify-between gap-3 ${
+                              hasScore
+                                ? 'bg-slate-50/70 border-gray-200'
+                                : isCompleted
+                                ? 'bg-white border-blue-200 shadow-2xs hover:border-blue-300'
+                                : 'bg-gray-50/50 border-gray-200'
+                            }`}
+                          >
+                            {/* Judul Divisi & Status */}
+                            <div>
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-xs font-bold text-gray-900 flex items-center gap-1.5">
+                                  <span className="w-5 h-5 rounded-md bg-[#244BFF] text-white text-[11px] font-bold flex items-center justify-center shrink-0">
+                                    {sIdx + 1}
+                                  </span>
+                                  <span>Pilihan {sIdx + 1}: Divisi {session.division?.name || 'Divisi'}</span>
+                                </span>
+                                {hasScore ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-bold">
+                                    <Sparkles className="w-3 h-3 text-amber-500" />
+                                    Skor: {session.review?.final_score} / 100
+                                  </span>
+                                ) : isCompleted ? (
+                                  <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-[#244BFF] border border-blue-200">
+                                    Audio Siap
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">
+                                    Dijadwalkan
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* Info Pewawancara */}
+                              <div className="mt-2.5 pt-2 border-t border-gray-100 text-xs flex items-center justify-between text-gray-600">
+                                <span className="flex items-center gap-1 text-[11px] text-gray-500">
+                                  <User className="w-3.5 h-3.5 text-gray-400" />
+                                  Pewawancara:
+                                </span>
+                                <span className="font-medium text-gray-800 text-xs">
+                                  {session.interviewer?.full_name || 'Belum Ditugaskan'}
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Tombol Aksi Masuk Pipeline AI */}
+                            <div className="pt-2">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenWorkspace(session)}
+                                className={`w-full inline-flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-bold transition cursor-pointer shadow-2xs ${
+                                  hasScore
+                                    ? 'bg-slate-900 hover:bg-slate-800 text-white'
+                                    : 'bg-[#244BFF] hover:bg-[#183CD8] text-white'
+                                }`}
+                              >
+                                <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                                <span>{hasScore ? 'Tinjau / Perbarui Pipeline AI' : 'Mulai Evaluasi AI'}</span>
+                                <ChevronRight className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 );
               })}
             </div>
           )}
-        </>
+        </div>
       ) : (
         /* TAMPILAN 2: Workspace Pipeline AI Interaktif untuk Sesi Terpilih */
         <div className="space-y-5">
